@@ -70,11 +70,14 @@ df = load_data()
 
 if not df.empty:
     df["study_date"] = pd.to_datetime(df["study_date"])
+    df["planned_datetime"] = pd.to_datetime(df["study_date"].astype(str) + " " + df["planned_start"])
     df["planned_hours"] = df["planned_minutes"] / 60
     df["actual_hours"] = df["actual_minutes"] / 60
     df["difference"] = df["actual_hours"] - df["planned_hours"]
+    df_display = df[["planned_datetime", "planned_hours", "actual_hours", "difference"]]
+    df_display.columns = ["予定日時", "予定時間(h)", "実績時間(h)", "差分(h)"]
 
-    st.dataframe(df[["study_date", "planned_hours", "actual_hours", "difference"]])
+    st.dataframe(df_display)
 
     st.subheader("目標 vs 実際")
     st.line_chart(df.set_index("study_date")[["planned_hours", "actual_hours"]])
@@ -134,4 +137,5 @@ if response.data:
         st.info("今日の通知時刻は過ぎています")
 else:
     st.info("今日はまだ予定が登録されていません")
+
 
