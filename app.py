@@ -1,47 +1,41 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
+from supabase import create_client, Client
 from datetime import datetime, date, time
 import time as t
 
 st.set_page_config(page_title="学習時間トラッカー", layout="wide")
 
 # ----------------------
-# DBセットアップ
+# Supabase 接続
 # ----------------------
-conn = sqlite3.connect("study_data.db", check_same_thread=False)
-c = conn.cursor()
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-c.execute("""
-CREATE TABLE IF NOT EXISTS study_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    study_date TEXT,
-    planned_minutes INTEGER,
-    actual_minutes INTEGER,
-    planned_start TEXT
-)
-""")
-conn.commit()
-
+# ----------------------
+# データ保存関数
+# ----------------------
+def save_data(study_date, planned, actual, planned_start):
+    supabase.table("study_log").insert({
+        "study_date": study_date,
+        "planned_minutes": planned,
+        "actual_minutes": actual,
+        "planned_start": planned_start
+    }).execute()
+    
 # ----------------------
 # データ取得関数
 # ----------------------
 def load_data():
-    df = pd.read_sql("SELECT * FROM study_log", conn)
-    return df
-
-def save_data(study_date, planned, actual, planned_start):
-    c.execute(
-        "INSERT INTO study_log (study_date, planned_minutes, actual_minutes, planned_start) VALUES (?, ?, ?, ?)",
-        (study_date, planned, actual, planned_start)
-    )
-    conn.commit()
-
+    response = supabase.table("study_log").select("*").order("study_date").execute()
+    return pd.DataFrame(response.data)
+    
 # ----------------------
 # タイトル
 # ----------------------
 st.title("📚 学習時間トラッカー")
-st.write("予定と実績の差を見える化しよう！")
+st.write("目標と実際の差を見える化しよう！")
 
 # ----------------------
 # 入力フォーム
@@ -82,62 +76,62 @@ if not df.empty:
 
     st.dataframe(df[["study_date", "planned_hours", "actual_hours", "difference"]])
 
-    st.subheader("予定 vs 実績")
+    st.subheader("目標 vs 実際")
     st.line_chart(df.set_index("study_date")[["planned_hours", "actual_hours"]])
 
-    st.subheader("実績 − 予定（差分）")
+    st.subheader("目標との差")
     st.bar_chart(df.set_index("study_date")["difference"])
 
 else:
     st.info("まだデータがありません")
 
 # ----------------------
-# 🔔 通知機能
+# 🔔 学習リマインダー
 # ----------------------
 st.header("⏰ 学習リマインダー")
-
 st.write("このページを開いている間、予定時刻になると通知します")
 
-# 通知許可用JS
+# 通知許可リクエスト
 st.components.v1.html("""
 <script>
-function requestNotificationPermission() {
-    if (Notification.permission !== "granted") {
-        Notification.requestPermission();
-    }
+if (Notification.permission !== "granted") {
+    Notification.requestPermission();
 }
-requestNotificationPermission();
 </script>
 """, height=0)
 
-if not df.empty:
-    today_str = str(date.today())
-    today_data = df[df["study_date"] == pd.to_datetime(today_str)]
+# 今日のデータをSupabaseから取得
+today_str = str(date.today())
 
-    if not today_data.empty:
-        planned_time_str = today_data.iloc[-1]["planned_start"]
-        planned_dt = datetime.strptime(today_str + " " + planned_time_str, "%Y-%m-%d %H:%M")
+response = supabase.table("study_log") \
+    .select("*") \
+    .eq("study_date", today_str) \
+    .order("created_at", desc=True) \
+    .limit(1) \
+    .execute()
 
-        now = datetime.now()
+if response.data:
+    today_record = response.data[0]
+    planned_time_str = today_record["planned_start"]
 
-        if now < planned_dt:
-            wait_seconds = (planned_dt - now).total_seconds()
-            st.write(f"次の通知まで約 {int(wait_seconds//60)} 分")
+    planned_dt = datetime.strptime(today_str + " " + planned_time_str, "%Y-%m-%d %H:%M")
+    now = datetime.now()
 
-            # 自動リロード用
-            st.experimental_singleton.clear()
-            t.sleep(1)
+    if now < planned_dt:
+        wait_seconds = int((planned_dt - now).total_seconds())
+        st.write(f"次の通知まで約 {wait_seconds // 60} 分")
 
-            st.components.v1.html(f"""
-            <script>
-            setTimeout(function() {{
-                new Notification("学習時間です！📚", {{
-                    body: "予定していた学習を始めましょう！"
-                }});
-            }}, {int(wait_seconds * 1000)});
-            </script>
-            """, height=0)
-        else:
-            st.info("今日の通知時刻は過ぎています")
+        st.components.v1.html(f"""
+        <script>
+        setTimeout(function() {{
+            new Notification("学習時間です！📚", {{
+                body: "予定していた学習を始めましょう！"
+            }});
+        }}, {wait_seconds * 1000});
+        </script>
+        """, height=0)
     else:
-        st.info("今日はまだ予定が登録されていません")
+        st.info("今日の通知時刻は過ぎています")
+else:
+    st.info("今日はまだ予定が登録されていません")
+
